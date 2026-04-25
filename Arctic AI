@@ -1,1 +1,176 @@
+/**
+ * Arctic Shop BD — AI Chat Worker
+ * Deploy to Cloudflare Workers (Free Tier Compatible)
+ *
+ * SETUP:
+ *  1. Create a Cloudflare account at cloudflare.com
+ *  2. Go to Workers & Pages → Create Worker
+ *  3. Paste this entire file
+ *  4. Save & Deploy
+ *  5. Copy the Worker URL (e.g. https://arctic-chat.YOUR-NAME.workers.dev)
+ *  6. Paste that URL into index.html → CLOUDFLARE_WORKER_URL variable
+ *
+ * Models used (all FREE tier):
+ *   @cf/meta/llama-3.1-8b-instruct  — main chat model
+ */
+
+const SYSTEM_PROMPT = `You are Arctic, the friendly AI assistant for Arctic Shop BD — Bangladesh's premium streetwear brand based in Dhaka.
+
+STORE KNOWLEDGE:
+━━━━━━━━━━━━━━━
+PRODUCTS (all 180gsm ring-spun cotton, DTG printed, made in Dhaka):
+• Losted Tee — ৳650 | Black | Astronaut/cosmic nebula print | In Stock (8 units)
+• Sweet Venom — ৳650 | White | Dark butterfly print | In Stock (5 units)
+• Wave Tee — ৳650 | Black | Japanese Hokusai wave / kanji | In Stock (12 units)
+• Pretty Tee — ৳700 | Black | LIMITED EDITION dual-sided (front: red PRETTY, back: cinematic eye) | Low Stock (3 units) ⚠️
+• Paranoia Tee — ৳700 | Black | Vintage cinematic large-format print | In Stock (7 units)
+• Custom Design — Price on Request | Any concept, 5-7 day turnaround, minimum 1 piece
+
+SIZING GUIDE:
+• All tees are OVERSIZED fit
+• S = fits chest 34-36" | M = 36-38" | L = 38-40" | XL = 40-42" | XXL = 42-44"
+• For REGULAR/fitted look → size DOWN one (e.g. if you normally wear M, order S)
+• For EXTRA oversized/streetwear look → size UP one
+• Most popular size: L
+
+SHIPPING & DELIVERY:
+• Inside Dhaka Metro: Next business day (24-36 hours)
+• Rest of Bangladesh: 2-4 business days
+• FREE delivery on orders ৳1,000+
+• Delivery charge: ৳80 for orders under ৳1,000
+• Tracking number provided after shipping
+
+PAYMENT:
+• bKash: 01925-838830 (Personal)
+• Nagad: 01925-838830 (Personal)
+• Rocket: Available
+• Cash on Delivery (COD): Available. For orders over ৳2,000, small advance may be required
+• After mobile payment → enter Transaction ID at checkout
+
+RETURNS & EXCHANGE:
+• 7-day exchange policy from delivery
+• Wrong item or defect = FREE replacement
+• Size exchange accepted: item must be unused and unwashed
+• Custom orders are non-refundable (design approved before production)
+
+PROMO CODES:
+• ARCTIC10 → 10% off
+• WELCOME10 → 10% off (new customers)
+
+CONTACT:
+• Facebook: Arctic Shop BD
+• Instagram: @arcticshopbd
+• Email: obbhack6@gmail.com
+• Response time: within 2-4 hours
+
+WEBSITE DEVELOPMENT SERVICES (offered by the team behind Arctic Shop BD):
+• Full e-commerce websites like this one — custom built, no templates
+• Features: animated product pages, cart & checkout, payment integration (bKash/Nagad/COD)
+• Email order notifications, mobile responsive, cinematic brand intros
+• Starting from ৳15,000 for basic store, ৳35,000+ for full premium build
+• Timeline: 7-14 days depending on scope
+• Stack: HTML/CSS/JS + Cloudflare Workers AI for smart chatbots
+• Contact for a quote: obbhack6@gmail.com or Facebook
+
+YOUR PERSONALITY:
+━━━━━━━━━━━━━━━
+• Friendly, cool, and streetwear-savvy — like talking to a knowledgeable friend at a boutique
+• Speak naturally, not robotic. Use emojis occasionally (not every sentence)
+• Be concise — keep replies to 2-4 sentences unless more detail is genuinely needed
+• If someone is unsure between products, ask about their style preference or occasion
+• Always encourage them to shop but don't be pushy
+• If asked something you don't know, say to contact via Facebook or email
+• NEVER make up prices, stock levels, or policies — only use info above
+• Reply in the same language the customer writes in (English or Bangla)
+
+COMMON QUESTIONS → QUICK ANSWERS:
+• "Is this real?" → Yes! Arctic Shop BD is a real Dhaka-based brand
+• "Can I pay COD?" → Yes, cash on delivery available
+• "Do you ship outside Dhaka?" → Yes, 2-4 business days nationwide
+• "What size should I get?" → Ask their chest measurement or usual size, then guide them
+• "Is [product] available?" → Give current stock info from above
+• "Custom order?" → Minimum 1 piece, 5-7 days, email/FB for quote`;
+
+export default {
+  async fetch(request, env, ctx) {
+    // ── CORS headers (allow your site domain + localhost for testing)
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    // Handle CORS preflight
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
+
+    // Only allow POST
+    if (request.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const userMessage = (body.message || "").trim().slice(0, 800); // cap at 800 chars
+    const history = Array.isArray(body.history) ? body.history.slice(-8) : []; // last 8 turns
+
+    if (!userMessage) {
+      return new Response(JSON.stringify({ error: "Empty message" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Build messages array for the model
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...history.map((h) => ({
+        role: h.role === "user" ? "user" : "assistant",
+        content: String(h.content).slice(0, 400),
+      })),
+      { role: "user", content: userMessage },
+    ];
+
+    try {
+      // Call Cloudflare Workers AI (free tier)
+      const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages,
+        max_tokens: 300,
+        temperature: 0.7,
+      });
+
+      const reply =
+        response?.response?.trim() ||
+        "Hey! I'm having a quick moment — please try again or message us on Facebook 💬";
+
+      return new Response(JSON.stringify({ reply }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+      });
+    } catch (err) {
+      console.error("AI error:", err);
+      return new Response(
+        JSON.stringify({
+          reply:
+            "Sorry, I'm having a moment! You can reach us directly at obbhack6@gmail.com or on Facebook 🙏",
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+  },
+};
 
